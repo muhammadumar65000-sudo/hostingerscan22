@@ -40,6 +40,48 @@ interface DeviceInfo {
   ua: string;
 }
 
+interface HardwareDetail {
+  type: string;
+  cores: number;
+  ram: string;
+  gpu: string;
+  screenRes: string;
+  viewportRes: string;
+  pixelRatio: number;
+  touchPoints: number;
+  colorDepth: number;
+  canvasHash: string;
+}
+
+interface BrowserDetail {
+  browser: string;
+  browserVersion: string;
+  os: string;
+  osVersion: string;
+  ua: string;
+  platform: string;
+  cookiesEnabled: boolean;
+  doNotTrack: string | null;
+  online: boolean;
+  pdfViewer: boolean;
+  primaryLanguage: string;
+  languages: string[];
+  timezone: string;
+  timezoneOffset: number;
+}
+
+interface DateTimeDetail {
+  browserTimezone: string;
+  browserTime: string;
+  browserOffset: number;
+  isDST: boolean;
+}
+
+interface NetworkDetail {
+  net: NetworkInfo;
+  webrtcIps: string[];
+}
+
 function getDeviceType(ua: string): 'Phone' | 'Tablet' | 'Desktop' {
   if (/iPad|Tablet/i.test(ua)) return 'Tablet';
   if (/Android/i.test(ua) && !/Mobile/i.test(ua)) return 'Tablet';
@@ -209,17 +251,6 @@ async function detectDevice(): Promise<DeviceInfo> {
   return { displayName: desktopName, brand: desktopBrand, modelCode: '—', type: 'Desktop', ...base };
 }
 
-function getBrandAccent(device: DeviceInfo | null): { color: string } {
-  if (!device) return { color: '0,212,106' };
-  const { os, osVersion } = device;
-  if (os === 'Android') return { color: '164,198,57' };
-  if (os === 'Windows') { const major = parseInt(osVersion, 10); return major >= 11 ? { color: '0,120,215' } : { color: '0,173,181' }; }
-  if (os === 'iOS' || os === 'iPadOS' || os === 'macOS') return { color: '230,230,235' };
-  if (os === 'ChromeOS') return { color: '251,188,5' };
-  if (os === 'Linux') return { color: '245,140,34' };
-  return { color: '0,212,106' };
-}
-
 function DeviceLogo({ device, size = 72 }: { device: DeviceInfo; size?: number }) {
   const { os, type } = device;
   const iconSize = Math.round(size * 0.8);
@@ -386,12 +417,16 @@ export default function PhoneModelDetector() {
     setStatuses({ device: 'scanning', hardware: 'scanning', browser: 'scanning', ip: 'scanning', datetime: 'scanning', network: 'scanning', fonts: 'scanning' });
     await Promise.allSettled(ALL_KEYS.map((k) => SCAN_FNS[k]()));
     const elapsed = Date.now() - overlayStartRef.current;
-    if (elapsed < 5000) await new Promise((r) => setTimeout(r, 5000 - elapsed));
+    if (elapsed < 2000) await new Promise((r) => setTimeout(r, 2000 - elapsed));
     setOverlayPhase('done');
-    overlayTimerRef.current = setTimeout(() => { setOverlayPhase('idle'); overlayTimerRef.current = null; }, 2200);
+    overlayTimerRef.current = setTimeout(() => { setOverlayPhase('idle'); overlayTimerRef.current = null; }, 1200);
   }, [scanDevice, scanHardware, scanBrowser, scanIp, scanDatetime, scanNetwork, scanFonts]);
 
-  useEffect(() => { return () => { if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current); }; }, []);
+  // Initial auto-scan on load
+  useEffect(() => {
+    scanAll();
+    return () => { if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current); };
+  }, []);
 
   const isScanning = overlayPhase === 'scanning' || Object.values(statuses).some((s) => s === 'scanning');
   const allDone = ALL_KEYS.every((k) => statuses[k] === 'done');
@@ -471,31 +506,113 @@ export default function PhoneModelDetector() {
         )}
 
         <section className="mb-16 fade-in-up" style={{ animationDelay: '120ms' }}>
-          <div className="grid sm:grid-cols-2 gap-4">
+          <div className="grid sm:grid-cols-2 gap-6">
+            
+            {/* 1. DEVICE MODEL CARD */}
             <div className="sm:col-span-2">
               <SectionCard {...SECTION_META.device} status={statuses.device} onScan={scanDevice} locked={isLocked}>
                 {device && (
-                  <div className="flex items-center gap-4 p-2">
+                  <div className="flex items-center gap-6 p-2">
                     <DeviceLogo device={device} size={64} />
-                    <div>
-                      <h3 className="text-lg font-bold text-foreground">{device.displayName}</h3>
-                      <p className="text-sm text-muted-foreground font-mono">{device.ua}</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 w-full">
+                      <KvCell label="Identified" value={device.displayName} />
+                      <KvCell label="OS" value={`${device.os} ${device.osVersion}`} />
+                      <KvCell label="Browser" value={`${device.browser} ${device.browserVersion}`} />
+                      <KvCell label="Architecture" value={device.architecture} mono />
                     </div>
                   </div>
                 )}
               </SectionCard>
             </div>
 
+            {/* 2. IP & LOCATION CARD */}
             <SectionCard {...SECTION_META.ip} status={statuses.ip} onScan={scanIp} locked={isLocked}>
               {ipInfo && (
-                <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                   <KvCell label="IP Address" value={ipInfo.ip} mono />
                   <KvCell label="Country" value={ipInfo.country ? `${ipInfo.country} (${ipInfo.countryCode})` : null} />
                   <KvCell label="City" value={ipInfo.city} />
-                  <KvCell label="ISP" value={ipInfo.isp} wide />
+                  <KvCell label="Region / State" value={ipInfo.region} />
+                  <KvCell label="ISP / Organization" value={ipInfo.isp || ipInfo.org} wide />
+                  <KvCell label="ASN" value={ipInfo.asn} mono />
+                  <KvCell label="Timezone" value={ipInfo.timezone} />
                 </div>
               )}
             </SectionCard>
+
+            {/* 3. USER-AGENT CARD */}
+            <SectionCard {...SECTION_META.browser} status={statuses.browser} onScan={scanBrowser} locked={isLocked}>
+              {browser && (
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                  <KvCell label="HTTP Browser" value={`${browser.browser} ${browser.browserVersion}`} />
+                  <KvCell label="Platform" value={browser.platform} mono />
+                  <KvCell label="Do Not Track" value={browser.doNotTrack === null ? 'null' : browser.doNotTrack} />
+                  <KvCell label="Hardware Concurrency" value={hardware?.cores} />
+                  <KvCell label="Full User-Agent" value={browser.ua} wide mono />
+                </div>
+              )}
+            </SectionCard>
+
+            {/* 4. DATE & TIME CARD */}
+            <SectionCard {...SECTION_META.datetime} status={statuses.datetime} onScan={scanDatetime} locked={isLocked}>
+              {datetime && (
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                  <KvCell label="Timezone from JS" value={datetime.browserTimezone} />
+                  <KvCell label="Daylight Saving Time" value={datetime.isDST ? 'Yes' : 'No'} />
+                  <KvCell label="Current Time" value={new Date(datetime.browserTime).toLocaleTimeString()} wide font-mono />
+                  <KvCell label="Full Date String" value={datetime.browserTime} wide font-mono />
+                </div>
+              )}
+            </SectionCard>
+
+            {/* 5. HARDWARE CARD */}
+            <SectionCard {...SECTION_META.hardware} status={statuses.hardware} onScan={scanHardware} locked={isLocked}>
+              {hardware && (
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                  <KvCell label="WebGL Vendor" value={hardware.gpu.split(',')[0] || 'Available'} wide />
+                  <KvCell label="WebGL Renderer" value={hardware.gpu.split(',')[1] || hardware.gpu} wide />
+                  <KvCell label="CPU Cores" value={hardware.cores} />
+                  <KvCell label="RAM (Approx)" value={hardware.ram} />
+                  <KvCell label="Screen Resolution" value={hardware.screenRes} mono />
+                  <KvCell label="Viewport Size" value={hardware.viewportRes} mono />
+                  <KvCell label="Color Depth" value={`${hardware.colorDepth} bits`} />
+                  <KvCell label="Canvas Fingerprint" value={hardware.canvasHash.substring(0, 16) + '...'} mono wide />
+                </div>
+              )}
+            </SectionCard>
+
+            {/* 6. NETWORK & DNS CARD */}
+            <SectionCard {...SECTION_META.network} status={statuses.network} onScan={scanNetwork} locked={isLocked}>
+              {network && (
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                  <KvCell label="Downlink Speed" value={network.net.downlink ? `${network.net.downlink} Mbps` : 'N/A'} />
+                  <KvCell label="Effective Type" value={network.net.effectiveType || 'N/A'} mono />
+                  <KvCell label="WebRTC Local IPs" value={network.webrtcIps.length > 0 ? network.webrtcIps.join(', ') : 'No leaks / None'} wide mono />
+                </div>
+              )}
+            </SectionCard>
+
+            {/* 7. INSTALLED FONTS CARD */}
+            <SectionCard {...SECTION_META.fonts} status={statuses.fonts} onScan={scanFonts} locked={isLocked}>
+              {fonts && (
+                <div className="col-span-2">
+                  <div className="text-xs text-muted-foreground mb-2">Detected system fonts baseline:</div>
+                  <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto p-1">
+                    {fonts.slice(0, 30).map((font) => (
+                      <span key={font} className="px-2 py-0.5 bg-secondary text-secondary-foreground text-[11px] rounded font-mono">
+                        {font}
+                      </span>
+                    ))}
+                    {fonts.length > 30 && (
+                      <span className="px-2 py-0.5 bg-muted text-muted-foreground text-[11px] rounded font-mono">
+                        + {fonts.length - 30} more fonts
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </SectionCard>
+
           </div>
         </section>
       </main>
