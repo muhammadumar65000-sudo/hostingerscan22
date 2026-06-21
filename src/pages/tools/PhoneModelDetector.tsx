@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   Smartphone, Monitor, Tablet, Cpu,
   Fingerprint, Zap, ShieldCheck, ChevronDown, ChevronUp, RotateCcw,
-  Apple, Chrome, Terminal, Loader2, Play,
+  Apple, Terminal, Loader2, Play,
   MapPin, Globe, Wifi, Type, Clock, Server, AlertTriangle,
 } from 'lucide-react';
 import { lookupModel, identifyBrand } from '@/lib/deviceModels';
@@ -227,63 +227,11 @@ function DeviceLogo({ device, size = 72 }: { device: DeviceInfo; size?: number }
   if (os === 'Android') return <Smartphone size={iconSize} className="text-[#a4c639]" strokeWidth={1.3} />;
   if (os === 'Windows') return <Monitor size={iconSize} className="text-[#0078d7]" strokeWidth={1.3} />;
   if (os === 'iOS' || os === 'iPadOS' || os === 'macOS') return <Apple size={iconSize} strokeWidth={1.3} fill="currentColor" />;
-  if (os === 'ChromeOS') return <Chrome size={iconSize} strokeWidth={1.3} className="text-[#fbbc05]" />;
+  if (os === 'ChromeOS') return <Globe size={iconSize} strokeWidth={1.3} className="text-[#fbbc05]" />;
   if (os === 'Linux') return <Terminal size={iconSize} strokeWidth={1.3} className="text-[#f58c22]" />;
   if (type === 'Tablet') return <Tablet size={iconSize} strokeWidth={1.3} />;
   if (type === 'Desktop') return <Monitor size={iconSize} strokeWidth={1.3} />;
   return <Smartphone size={iconSize} strokeWidth={1.3} />;
-}
-
-const FAQS = [
-  { q: 'How does PhoneDetect identify my device?', a: "We read your browser's User-Agent string and the newer User-Agent Client Hints API, then match the model code against a database of 300+ known devices to resolve the friendly market name (e.g. \"SM-S928B\" → \"Samsung Galaxy S24 Ultra\"). On iPhone we additionally use screen dimensions and pixel ratio because Apple does not expose model codes." },
-  { q: 'Does this work on desktop computers?', a: "Yes. On desktop you'll see \"Windows PC\", \"Apple Mac\", \"Linux PC\" or \"Chromebook\" along with your OS version, browser, screen resolution, CPU cores, GPU and RAM. Precise laptop models cannot be identified from the browser, but all the hardware a webpage can see is shown." },
-  { q: 'Is any data sent to a server?', a: 'No. PhoneDetect runs 100% in your browser. We never send, log, or store your device information. Nothing leaves your device.' },
-  { q: 'Why does my phone show the model code instead of a name?', a: 'Very new or rare devices may not yet be in our database. The raw model code is still accurate and unique — search it on Google to find the marketing name.' },
-  { q: 'Can I hide or change what sites detect?', a: 'Yes. Most browsers let you spoof your User-Agent or disable Client Hints via an extension. Doing so will change what PhoneDetect (and every other website) sees.' },
-];
-
-interface AiResult {
-  brand: string; marketName: string; fullName: string;
-  releaseYear: string | null; confidence: 'high' | 'medium' | 'low'; source: 'ai' | 'cache';
-}
-
-const AI_CACHE_PREFIX = 'phonedetect_ai_v1:';
-
-async function identifyWithAI(device: DeviceInfo): Promise<AiResult | null> {
-  const payload = { modelCode: device.modelCode !== '—' ? device.modelCode : '', userAgent: device.ua, platform: device.platform, type: device.type, os: device.os, osVersion: device.osVersion, hints: { gpu: device.gpu, cores: device.cores, ram: device.ram, screenRes: device.screenRes, pixelRatio: device.pixelRatio, architecture: device.architecture } };
-  const cacheKey = AI_CACHE_PREFIX + JSON.stringify({ m: payload.modelCode, p: payload.platform, t: payload.type, o: payload.os, v: payload.osVersion });
-  try { const cached = sessionStorage.getItem(cacheKey); if (cached) return JSON.parse(cached) as AiResult; } catch {}
-  try {
-    const baseUrl = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
-    const apiBase = baseUrl.replace(/\/browserscan$/, '') + '/api';
-    const resp = await fetch(`${apiBase}/identify-device`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    if (!resp.ok) return null;
-    const result = (await resp.json()) as AiResult;
-    try { sessionStorage.setItem(cacheKey, JSON.stringify(result)); } catch {}
-    return result;
-  } catch { return null; }
-}
-
-interface BrowserDetail {
-  browser: string; browserVersion: string; os: string; osVersion: string; ua: string;
-  platform: string; cookiesEnabled: boolean; doNotTrack: string | null;
-  online: boolean; pdfViewer: boolean | null; primaryLanguage: string;
-  languages: readonly string[]; timezone: string | null; timezoneOffset: number;
-}
-
-interface HardwareDetail {
-  type: 'Phone' | 'Tablet' | 'Desktop'; cores: number; ram: string; gpu: string;
-  screenRes: string; viewportRes: string; pixelRatio: number; touchPoints: number;
-  colorDepth: number; canvasHash: string;
-}
-
-interface NetworkDetail { net: NetworkInfo; webrtcIps: string[]; }
-
-interface DateTimeDetail {
-  browserTimezone: string;
-  browserTime: string;
-  browserOffset: number;
-  isDST: boolean;
 }
 
 const ALL_KEYS = ['device', 'hardware', 'browser', 'ip', 'datetime', 'network', 'fonts'] as const;
@@ -326,12 +274,7 @@ export default function PhoneModelDetector() {
     setSt('device', 'scanning');
     try {
       const result = await detectDevice();
-      if (result.type !== 'Desktop') {
-        const ai = await identifyWithAI(result);
-        if (ai && ai.marketName && ai.confidence !== 'low') {
-          setDevice({ ...result, displayName: ai.fullName || `${ai.brand} ${ai.marketName}`.trim(), brand: ai.brand || result.brand });
-        } else { setDevice(result); }
-      } else { setDevice(result); }
+      setDevice(result);
       setSt('device', 'done');
     } catch { setSt('device', 'error'); }
   }, []);
@@ -464,12 +407,6 @@ export default function PhoneModelDetector() {
       fonts: fonts,
     });
   }, [allDone, ipInfo, datetime, hardware, network, browser, fonts]);
-
-  const [liveTime, setLiveTime] = useState(() => new Date());
-  useEffect(() => {
-    const t = setInterval(() => setLiveTime(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   return (
     <div className="min-h-screen bg-background relative overflow-x-hidden">
