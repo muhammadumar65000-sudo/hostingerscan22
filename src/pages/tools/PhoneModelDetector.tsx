@@ -137,4 +137,432 @@ function getGPU(): string {
 }
 
 function getOS(ua: string): { os: string; version: string } {
-  if (/iPhone OS (\d+_\d+)/.test(ua)) return { os: 'iOS', version: ua.match(/iPhone OS (\d+_\d+)/)?.
+  if (/iPhone OS (\d+_\d+)/.test(ua)) return { os: 'iOS', version: ua.match(/iPhone OS (\d+_\d+)/)?.[1]?.replace('_', '.') || '' };
+  if (/iPad.*OS (\d+_\d+)/.test(ua)) return { os: 'iPadOS', version: ua.match(/OS (\d+_\d+)/)?.[1]?.replace('_', '.') || '' };
+  if (/Android (\d+\.?\d*)/.test(ua)) return { os: 'Android', version: ua.match(/Android (\d+\.?\d*)/)?.[1] || '' };
+  if (/Windows NT ([\d.]+)/.test(ua)) {
+    const v = ua.match(/Windows NT ([\d.]+)/)?.[1] || '';
+    const map: Record<string, string> = { '10.0': '10', '6.3': '8.1', '6.2': '8', '6.1': '7' };
+    return { os: 'Windows', version: map[v] || v };
+  }
+  if (/Mac OS X ([\d_.]+)/.test(ua)) return { os: 'macOS', version: (ua.match(/Mac OS X ([\d_.]+)/)?.[1] || '').replace(/_/g, '.') };
+  if (/CrOS/.test(ua)) return { os: 'ChromeOS', version: '' };
+  if (/Linux/.test(ua)) return { os: 'Linux', version: '' };
+  return { os: 'Unknown', version: '' };
+}
+
+function getBrowser(ua: string): { browser: string; version: string } {
+  const tests: Array<[RegExp, string]> = [
+    [/Edg\/([\d.]+)/, 'Edge'], [/OPR\/([\d.]+)/, 'Opera'], [/Firefox\/([\d.]+)/, 'Firefox'],
+    [/Chrome\/([\d.]+)/, 'Chrome'], [/Version\/([\d.]+).*Safari/, 'Safari'],
+  ];
+  for (const [r, name] of tests) {
+    const m = ua.match(r);
+    if (m) return { browser: name, version: m[1].split('.').slice(0, 2).join('.') };
+  }
+  return { browser: 'Unknown', version: '' };
+}
+
+async function detectDevice(): Promise<DeviceInfo> {
+  const ua = navigator.userAgent;
+  const type = getDeviceType(ua);
+  const osInfo = getOS(ua);
+  const browserInfo = getBrowser(ua);
+  const gpu = getGPU();
+  const nav = navigator as any;
+  const uaData = (navigator as any).userAgentData;
+  let architecture = 'Unknown';
+  let platform = osInfo.os;
+  let rawModel = '';
+  if (uaData && typeof uaData.getHighEntropyValues === 'function') {
+    try {
+      const hints = await uaData.getHighEntropyValues(['model', 'platform', 'platformVersion', 'architecture']);
+      rawModel = hints.model || '';
+      architecture = hints.architecture || architecture;
+      if (hints.platform) platform = hints.platform;
+      if (osInfo.os === 'Windows' && hints.platformVersion) {
+        const major = parseInt(String(hints.platformVersion).split('.')[0], 10);
+        if (!Number.isNaN(major)) osInfo.version = major >= 13 ? '11' : '10';
+      }
+    } catch {}
+  }
+  const base = {
+    os: osInfo.os, osVersion: osInfo.version, browser: browserInfo.browser,
+    browserVersion: browserInfo.version, screenRes: `${screen.width} × ${screen.height}`,
+    viewportRes: `${window.innerWidth} × ${window.innerHeight}`,
+    pixelRatio: window.devicePixelRatio || 1,
+    ram: nav.deviceMemory ? `${nav.deviceMemory} GB` : 'Unavailable',
+    cores: nav.hardwareConcurrency || 0, gpu, touchPoints: navigator.maxTouchPoints || 0,
+    platform, architecture, ua,
+  };
+  const iphone = detectIphone();
+  if (iphone) return { ...iphone, ...base };
+  const fromUA = detectFromUA(ua, type);
+  if (fromUA) return { ...fromUA, ...base };
+  if (rawModel && rawModel !== '' && rawModel !== 'K') return { ...resolveDevice(rawModel, type), ...base };
+  if (/Android/.test(ua)) return { displayName: 'Android Device', brand: 'Android', modelCode: 'Unknown', type, ...base };
+  let desktopName = 'Desktop Computer'; let desktopBrand = 'Desktop';
+  if (/Windows/.test(ua)) { desktopName = 'Windows PC'; desktopBrand = 'Windows'; }
+  else if (/Macintosh/.test(ua)) { desktopName = 'Apple Mac'; desktopBrand = 'Apple'; }
+  else if (/CrOS/.test(ua)) { desktopName = 'Chromebook'; desktopBrand = 'ChromeOS'; }
+  else if (/Linux/.test(ua)) { desktopName = 'Linux PC'; desktopBrand = 'Linux'; }
+  return { displayName: desktopName, brand: desktopBrand, modelCode: '—', type: 'Desktop', ...base };
+}
+
+function getBrandAccent(device: DeviceInfo | null): { color: string } {
+  if (!device) return { color: '0,212,106' };
+  const { os, osVersion } = device;
+  if (os === 'Android') return { color: '164,198,57' };
+  if (os === 'Windows') { const major = parseInt(osVersion, 10); return major >= 11 ? { color: '0,120,215' } : { color: '0,173,181' }; }
+  if (os === 'iOS' || os === 'iPadOS' || os === 'macOS') return { color: '230,230,235' };
+  if (os === 'ChromeOS') return { color: '251,188,5' };
+  if (os === 'Linux') return { color: '245,140,34' };
+  return { color: '0,212,106' };
+}
+
+function DeviceLogo({ device, size = 72 }: { device: DeviceInfo; size?: number }) {
+  const { os, type } = device;
+  const iconSize = Math.round(size * 0.8);
+  
+  if (os === 'Android') return <Smartphone size={iconSize} className="text-[#a4c639]" strokeWidth={1.3} />;
+  if (os === 'Windows') return <Monitor size={iconSize} className="text-[#0078d7]" strokeWidth={1.3} />;
+  if (os === 'iOS' || os === 'iPadOS' || os === 'macOS') return <Apple size={iconSize} strokeWidth={1.3} fill="currentColor" />;
+  if (os === 'ChromeOS') return <Chrome size={iconSize} strokeWidth={1.3} className="text-[#fbbc05]" />;
+  if (os === 'Linux') return <Terminal size={iconSize} strokeWidth={1.3} className="text-[#f58c22]" />;
+  if (type === 'Tablet') return <Tablet size={iconSize} strokeWidth={1.3} />;
+  if (type === 'Desktop') return <Monitor size={iconSize} strokeWidth={1.3} />;
+  return <Smartphone size={iconSize} strokeWidth={1.3} />;
+}
+
+const FAQS = [
+  { q: 'How does PhoneDetect identify my device?', a: "We read your browser's User-Agent string and the newer User-Agent Client Hints API, then match the model code against a database of 300+ known devices to resolve the friendly market name (e.g. \"SM-S928B\" → \"Samsung Galaxy S24 Ultra\"). On iPhone we additionally use screen dimensions and pixel ratio because Apple does not expose model codes." },
+  { q: 'Does this work on desktop computers?', a: "Yes. On desktop you'll see \"Windows PC\", \"Apple Mac\", \"Linux PC\" or \"Chromebook\" along with your OS version, browser, screen resolution, CPU cores, GPU and RAM. Precise laptop models cannot be identified from the browser, but all the hardware a webpage can see is shown." },
+  { q: 'Is any data sent to a server?', a: 'No. PhoneDetect runs 100% in your browser. We never send, log, or store your device information. Nothing leaves your device.' },
+  { q: 'Why does my phone show the model code instead of a name?', a: 'Very new or rare devices may not yet be in our database. The raw model code is still accurate and unique — search it on Google to find the marketing name.' },
+  { q: 'Can I hide or change what sites detect?', a: 'Yes. Most browsers let you spoof your User-Agent or disable Client Hints via an extension. Doing so will change what PhoneDetect (and every other website) sees.' },
+];
+
+interface AiResult {
+  brand: string; marketName: string; fullName: string;
+  releaseYear: string | null; confidence: 'high' | 'medium' | 'low'; source: 'ai' | 'cache';
+}
+
+const AI_CACHE_PREFIX = 'phonedetect_ai_v1:';
+
+async function identifyWithAI(device: DeviceInfo): Promise<AiResult | null> {
+  const payload = { modelCode: device.modelCode !== '—' ? device.modelCode : '', userAgent: device.ua, platform: device.platform, type: device.type, os: device.os, osVersion: device.osVersion, hints: { gpu: device.gpu, cores: device.cores, ram: device.ram, screenRes: device.screenRes, pixelRatio: device.pixelRatio, architecture: device.architecture } };
+  const cacheKey = AI_CACHE_PREFIX + JSON.stringify({ m: payload.modelCode, p: payload.platform, t: payload.type, o: payload.os, v: payload.osVersion });
+  try { const cached = sessionStorage.getItem(cacheKey); if (cached) return JSON.parse(cached) as AiResult; } catch {}
+  try {
+    const baseUrl = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+    const apiBase = baseUrl.replace(/\/browserscan$/, '') + '/api';
+    const resp = await fetch(`${apiBase}/identify-device`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!resp.ok) return null;
+    const result = (await resp.json()) as AiResult;
+    try { sessionStorage.setItem(cacheKey, JSON.stringify(result)); } catch {}
+    return result;
+  } catch { return null; }
+}
+
+interface BrowserDetail {
+  browser: string; browserVersion: string; os: string; osVersion: string; ua: string;
+  platform: string; cookiesEnabled: boolean; doNotTrack: string | null;
+  online: boolean; pdfViewer: boolean | null; primaryLanguage: string;
+  languages: readonly string[]; timezone: string | null; timezoneOffset: number;
+}
+
+interface HardwareDetail {
+  type: 'Phone' | 'Tablet' | 'Desktop'; cores: number; ram: string; gpu: string;
+  screenRes: string; viewportRes: string; pixelRatio: number; touchPoints: number;
+  colorDepth: number; canvasHash: string;
+}
+
+interface NetworkDetail { net: NetworkInfo; webrtcIps: string[]; }
+
+interface DateTimeDetail {
+  browserTimezone: string;
+  browserTime: string;
+  browserOffset: number;
+  isDST: boolean;
+}
+
+const ALL_KEYS = ['device', 'hardware', 'browser', 'ip', 'datetime', 'network', 'fonts'] as const;
+type SectionKey = typeof ALL_KEYS[number];
+
+const SECTION_META: Record<SectionKey, { title: string; icon: React.ReactNode }> = {
+  device:   { title: 'Device Model',    icon: <Smartphone size={17} strokeWidth={2.2} /> },
+  hardware: { title: 'Hardware',        icon: <Cpu size={17} strokeWidth={2.2} /> },
+  browser:  { title: 'User-Agent',      icon: <Globe size={17} strokeWidth={2.2} /> },
+  ip:       { title: 'IP & Location',   icon: <MapPin size={17} strokeWidth={2.2} /> },
+  datetime: { title: 'Date & Time',      icon: <Clock size={17} strokeWidth={2.2} /> },
+  network:  { title: 'Network & DNS',   icon: <Wifi size={17} strokeWidth={2.2} /> },
+  fonts:    { title: 'Installed Fonts', icon: <Type size={17} strokeWidth={2.2} /> },
+};
+
+export default function PhoneModelDetector() {
+  const [statuses, setStatuses] = useState<Record<SectionKey, SectionStatus>>({
+    device: 'idle', hardware: 'idle', browser: 'idle',
+    ip: 'idle', datetime: 'idle', network: 'idle', fonts: 'idle',
+  });
+
+  const [device, setDevice] = useState<DeviceInfo | null>(null);
+  const [hardware, setHardware] = useState<HardwareDetail | null>(null);
+  const [browser, setBrowser] = useState<BrowserDetail | null>(null);
+  const [ipInfo, setIpInfo] = useState<IpInfoResponse | null>(null);
+  const [datetime, setDatetime] = useState<DateTimeDetail | null>(null);
+  const [network, setNetwork] = useState<NetworkDetail | null>(null);
+  const [fonts, setFonts] = useState<string[] | null>(null);
+
+  const [overlayPhase, setOverlayPhase] = useState<'idle' | 'scanning' | 'done'>('idle');
+  const overlayStartRef = useRef<number>(0);
+  const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const setSt = (k: SectionKey, s: SectionStatus) =>
+    setStatuses((prev) => ({ ...prev, [k]: s }));
+
+  const isLocked = overlayPhase === 'scanning';
+
+  const scanDevice = useCallback(async () => {
+    setSt('device', 'scanning');
+    try {
+      const result = await detectDevice();
+      if (result.type !== 'Desktop') {
+        const ai = await identifyWithAI(result);
+        if (ai && ai.marketName && ai.confidence !== 'low') {
+          setDevice({ ...result, displayName: ai.fullName || `${ai.brand} ${ai.marketName}`.trim(), brand: ai.brand || result.brand });
+        } else { setDevice(result); }
+      } else { setDevice(result); }
+      setSt('device', 'done');
+    } catch { setSt('device', 'error'); }
+  }, []);
+
+  const scanHardware = useCallback(async () => {
+    setSt('hardware', 'scanning');
+    try {
+      await new Promise((r) => setTimeout(r, 250));
+      const ua = navigator.userAgent;
+      const type = getDeviceType(ua);
+      const sw = screen.width * (window.devicePixelRatio || 1);
+      const sh = screen.height * (window.devicePixelRatio || 1);
+      let gpu = 'Unknown';
+      try {
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        if (gl) { const ext = (gl as WebGLRenderingContext).getExtension('WEBGL_debug_renderer_info'); if (ext) gpu = (gl as WebGLRenderingContext).getParameter(ext.UNMASKED_RENDERER_WEBGL) as string; }
+      } catch {}
+      const ramVal = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+      setHardware({
+        type, cores: navigator.hardwareConcurrency || 0,
+        ram: ramVal ? `${ramVal} GB` : 'Unavailable', gpu,
+        screenRes: `${Math.round(sw)} × ${Math.round(sh)}`,
+        viewportRes: `${window.innerWidth} × ${window.innerHeight}`,
+        pixelRatio: window.devicePixelRatio || 1,
+        touchPoints: navigator.maxTouchPoints || 0,
+        colorDepth: window.screen.colorDepth,
+        canvasHash: getCanvasFingerprint(),
+      });
+      setSt('hardware', 'done');
+    } catch { setSt('hardware', 'error'); }
+  }, []);
+
+  const scanBrowser = useCallback(async () => {
+    setSt('browser', 'scanning');
+    try {
+      await new Promise((r) => setTimeout(r, 250));
+      const ua = navigator.userAgent;
+      const { browser: bn, version: bv } = getBrowser(ua);
+      const { os: on, version: ov } = getOS(ua);
+      const locale = getLocaleInfo();
+      const plat = getPlatformInfo();
+      setBrowser({
+        browser: bn, browserVersion: bv, os: on, osVersion: ov, ua,
+        platform: plat.platform, cookiesEnabled: plat.cookiesEnabled,
+        doNotTrack: plat.doNotTrack, online: plat.online, pdfViewer: plat.pdfViewer,
+        primaryLanguage: locale.primary, languages: locale.languages,
+        timezone: locale.timezone, timezoneOffset: locale.timezoneOffset,
+      });
+      setSt('browser', 'done');
+    } catch { setSt('browser', 'error'); }
+  }, []);
+
+  const scanIp = useCallback(async () => {
+    setSt('ip', 'scanning');
+    try {
+      const data = await fetchIpInfo();
+      if (!data) { setSt('ip', 'error'); return; }
+      setIpInfo(data);
+      setSt('ip', 'done');
+    } catch { setSt('ip', 'error'); }
+  }, []);
+
+  const scanDatetime = useCallback(async () => {
+    setSt('datetime', 'scanning');
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      const now = new Date();
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const offset = -now.getTimezoneOffset();
+      const jan = new Date(now.getFullYear(), 0, 1);
+      const jul = new Date(now.getFullYear(), 6, 1);
+      const isDST = -now.getTimezoneOffset() > Math.min(-jan.getTimezoneOffset(), -jul.getTimezoneOffset());
+      setDatetime({ browserTimezone: tz, browserTime: now.toString(), browserOffset: offset, isDST });
+      setSt('datetime', 'done');
+    } catch { setSt('datetime', 'error'); }
+  }, []);
+
+  const scanNetwork = useCallback(async () => {
+    setSt('network', 'scanning');
+    try {
+      const [ips] = await Promise.all([getWebRTCLocalIPs()]);
+      setNetwork({ net: getNetworkInfo(), webrtcIps: ips });
+      setSt('network', 'done');
+    } catch { setSt('network', 'error'); }
+  }, []);
+
+  const scanFonts = useCallback(async () => {
+    setSt('fonts', 'scanning');
+    try {
+      await new Promise((r) => setTimeout(r, 250));
+      const list = detectFonts();
+      setFonts(list);
+      setSt('fonts', 'done');
+    } catch { setSt('fonts', 'error'); }
+  }, []);
+
+  const SCAN_FNS: Record<SectionKey, () => Promise<void>> = {
+    device: scanDevice, hardware: scanHardware, browser: scanBrowser,
+    ip: scanIp, datetime: scanDatetime, network: scanNetwork, fonts: scanFonts,
+  };
+
+  const scanAll = useCallback(async () => {
+    if (overlayTimerRef.current) { clearTimeout(overlayTimerRef.current); overlayTimerRef.current = null; }
+    setDevice(null); setHardware(null); setBrowser(null);
+    setIpInfo(null); setDatetime(null); setNetwork(null); setFonts(null);
+    overlayStartRef.current = Date.now();
+    setOverlayPhase('scanning');
+    setStatuses({ device: 'scanning', hardware: 'scanning', browser: 'scanning', ip: 'scanning', datetime: 'scanning', network: 'scanning', fonts: 'scanning' });
+    await Promise.allSettled(ALL_KEYS.map((k) => SCAN_FNS[k]()));
+    const elapsed = Date.now() - overlayStartRef.current;
+    if (elapsed < 5000) await new Promise((r) => setTimeout(r, 5000 - elapsed));
+    setOverlayPhase('done');
+    overlayTimerRef.current = setTimeout(() => { setOverlayPhase('idle'); overlayTimerRef.current = null; }, 2200);
+  }, [scanDevice, scanHardware, scanBrowser, scanIp, scanDatetime, scanNetwork, scanFonts]);
+
+  useEffect(() => { return () => { if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current); }; }, []);
+
+  const isScanning = overlayPhase === 'scanning' || Object.values(statuses).some((s) => s === 'scanning');
+  const allDone = ALL_KEYS.every((k) => statuses[k] === 'done');
+
+  const privacyScore = useMemo(() => {
+    if (!allDone) return null;
+    return computePrivacyScore({
+      ipInfo: ipInfo ? { timezone: ipInfo.timezone, isp: ipInfo.isp, asn: ipInfo.asn, org: ipInfo.org } : null,
+      datetime: datetime ? { browserTimezone: datetime.browserTimezone } : null,
+      hardware: hardware ? { cores: hardware.cores, ram: hardware.ram, canvasHash: hardware.canvasHash } : null,
+      network: network ? { webrtcIps: network.webrtcIps } : null,
+      browser: browser ? { languages: browser.languages, primaryLanguage: browser.primaryLanguage } : null,
+      fonts: fonts,
+    });
+  }, [allDone, ipInfo, datetime, hardware, network, browser, fonts]);
+
+  const [liveTime, setLiveTime] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setLiveTime(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-background relative overflow-x-hidden">
+      <ScanOverlay phase={overlayPhase} />
+
+      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+        <div className="absolute inset-0 dot-grid opacity-30" />
+        <div className="absolute -top-40 -right-40 w-[600px] h-[600px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(0,212,106,0.06) 0%, transparent 70%)' }} />
+      </div>
+
+      <SiteNav />
+
+      <main className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 pt-10 sm:pt-14 pb-16">
+        <section className="text-center mb-10 sm:mb-12 fade-in-up">
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl tracking-[-0.04em] leading-[0.95] text-foreground mb-5">
+            Scan your <span className="text-gradient">device</span><span className="text-primary">.</span>
+          </h1>
+          <p className="text-base sm:text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+            Full browser fingerprint analysis — device model, hardware, IP location, timezone, WebRTC leaks, fonts, and a Trust Score. All computed instantly.
+          </p>
+        </section>
+
+        <section className="mb-8 sm:mb-10 fade-in-up" style={{ animationDelay: '60ms' }}>
+          <div className="relative">
+            <div className="absolute -inset-1 rounded-3xl pointer-events-none transition-opacity duration-700"
+              style={{ background: overlayPhase === 'scanning' ? 'radial-gradient(ellipse at center, rgba(255,59,59,0.35) 0%, transparent 70%)' : 'radial-gradient(ellipse at center, rgba(0,212,106,0.35) 0%, transparent 70%)', filter: 'blur(20px)' }} />
+            <div className="relative rounded-3xl overflow-hidden p-5 sm:p-7 transition-all duration-700"
+              style={{ background: overlayPhase === 'scanning' ? 'linear-gradient(135deg, rgba(255,59,59,0.18) 0%, rgba(255,59,59,0.06) 100%)' : 'linear-gradient(135deg, rgba(0,212,106,0.18) 0%, rgba(0,212,106,0.06) 100%)', border: overlayPhase === 'scanning' ? '1px solid rgba(255,59,59,0.28)' : '1px solid rgba(0,212,106,0.28)' }}>
+              <div className="flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
+                <div className="flex items-center gap-3 min-w-0">
+                  {isScanning && <Loader2 size={28} className="text-foreground animate-spin flex-shrink-0" strokeWidth={2.5} />}
+                  <div className="min-w-0">
+                    <h2 className="text-xl sm:text-3xl font-black tracking-tight text-foreground leading-tight" style={{ fontFamily: "'Inter', sans-serif", letterSpacing: '-0.02em' }}>
+                      {!isScanning && !allDone && 'Check My Device'}
+                      {isScanning && 'Checking your device...'}
+                      {allDone && !isScanning && 'Check complete'}
+                    </h2>
+                    <div className="text-[11px] sm:text-xs text-foreground/60 font-mono mt-1 tracking-wide">
+                      {!isScanning && !allDone && 'Seven checks · device, hardware, browser, IP, time, network, fonts'}
+                      {isScanning && 'Scanning your browser signals, please wait...'}
+                      {allDone && !isScanning && 'All checks completed successfully'}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={scanAll}
+                  disabled={isScanning}
+                  className="group relative flex items-center gap-2 px-5 sm:px-7 py-2.5 sm:py-3 rounded-full text-sm sm:text-base font-bold transition-all hover:scale-[1.03] active:scale-[0.98] flex-shrink-0 disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{ background: 'linear-gradient(180deg, #00e676 0%, #00c853 100%)', color: '#0a0a0a', boxShadow: '0 8px 24px rgba(0,212,106,0.35), 0 0 0 1px rgba(255,255,255,0.15) inset' }}
+                >
+                  {isScanning ? <><Loader2 size={14} className="animate-spin" /> <span>Checking...</span></> : allDone ? <><RotateCcw size={14} /> <span>Check Again</span></> : <><span>Check My Device</span><Play size={14} fill="#0a0a0a" className="ml-0.5" /></>}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {privacyScore && (
+          <section className="mb-8 fade-in-up" style={{ animationDelay: '80ms' }}>
+            <PrivacyScore result={privacyScore} />
+          </section>
+        )}
+
+        <section className="mb-16 fade-in-up" style={{ animationDelay: '120ms' }}>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <SectionCard {...SECTION_META.device} status={statuses.device} onScan={scanDevice} locked={isLocked}>
+                {device && (
+                  <div className="flex items-center gap-4 p-2">
+                    <DeviceLogo device={device} size={64} />
+                    <div>
+                      <h3 className="text-lg font-bold text-foreground">{device.displayName}</h3>
+                      <p className="text-sm text-muted-foreground font-mono">{device.ua}</p>
+                    </div>
+                  </div>
+                )}
+              </SectionCard>
+            </div>
+
+            <SectionCard {...SECTION_META.ip} status={statuses.ip} onScan={scanIp} locked={isLocked}>
+              {ipInfo && (
+                <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+                  <KvCell label="IP Address" value={ipInfo.ip} mono />
+                  <KvCell label="Country" value={ipInfo.country ? `${ipInfo.country} (${ipInfo.countryCode})` : null} />
+                  <KvCell label="City" value={ipInfo.city} />
+                  <KvCell label="ISP" value={ipInfo.isp} wide />
+                </div>
+              )}
+            </SectionCard>
+          </div>
+        </section>
+      </main>
+      <SiteFooter />
+    </div>
+  );
+}
